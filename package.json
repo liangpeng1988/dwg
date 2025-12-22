@@ -1,0 +1,37 @@
+{
+  "name": "@aether3d/dwg-plugin",
+  "version": "1.0.0",
+  "description": "DWG Plugin for Aether3D with WASM support",
+  "type": "module",
+  "main": "dist/dwg-plugin.min.js",
+  "module": "dist/dwg-plugin.min.js",
+  "types": "index.ts",
+  "scripts": {
+    "build": "vite build --config vite.config.cjs"
+  },
+  "peerDependencies": {
+    "three": "^0.171.0",
+    "@aether3d/engine": "^1.0.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.7",
+    "terser": "^5.36.0",
+    "typescript": "^5.7.2"
+  },
+  "keywords": [
+    "aether3d",
+    "plugin",
+    "dwg",
+    "autocad",
+    "cad",
+    "wasm",
+    "3d"
+  ],
+  "author": "",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "wasm",
+    "embind"
+  ]
+}
