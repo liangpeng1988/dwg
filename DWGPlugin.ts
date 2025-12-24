@@ -1,8 +1,8 @@
-import { Plugin } from "@/core/plugin/plugin";
+// @ts-ignore - aether3d库的类型声明可能不完整
+import { Plugin, App } from '../../../aether3d/aether3d.es.js';
 import { LibreDwg, LibreDwgEx } from './src/libredwg';
 import { Dwg_File_Type } from './src/types';
 import { renderDWGDatabase, ViewportDraw } from "./src";
-import App from '@/core/app';
 
 /**
  * DWG插件配置接口
@@ -313,8 +313,6 @@ export class DWGPlugin implements Plugin {
      * @returns ViewportDraw实例
      */
     public renderToScene(database: any): ViewportDraw {
-        this.ensureViewer();
-        
         // 清理旧的实例
         if (this.threeDrawingInstance) {
             this.threeDrawingInstance.clearEntities();
