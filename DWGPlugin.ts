@@ -1,8 +1,9 @@
-import { Plugin } from "@/core/plugin/plugin";
+import type { Plugin } from '@/core/plugin/plugin';
 import { LibreDwg, LibreDwgEx } from './src/libredwg';
 import { Dwg_File_Type } from './src/types';
 import { renderDWGDatabase, ViewportDraw } from "./src";
-import App from '@/core/app';
+
+type DWGCoordinateSystem = 'xy' | 'xz';
 
 /**
  * DWG插件配置接口
@@ -13,8 +14,9 @@ export interface DWGPluginConfig {
     showThumbnail: boolean;
     scaleFactor: number;
     autoRender: boolean;
-    defaultCoordinateSystem: 'xy' | 'xz';
+    defaultCoordinateSystem: DWGCoordinateSystem;
 }
+
 
 /**
  * DWG转换结果接口
@@ -26,10 +28,15 @@ export interface DWGConversionResult {
     viewportDraw?: ViewportDraw;
 }
 
+export interface DWGConversionOptions {
+    coordinateSystem?: DWGCoordinateSystem;
+}
+
 /**
  * 进度回调函数类型
  */
 export type ProgressCallback = (progress: number, message: string) => void;
+
 
 /**
  * DWG插件类，实现Plugin接口
@@ -54,10 +61,12 @@ export class DWGPlugin implements Plugin {
         showThumbnail: true,
         scaleFactor: 0.1,
         autoRender: true,
-        defaultCoordinateSystem: 'xy'
+        defaultCoordinateSystem: 'xz'
     };
+    private currentCoordinateSystem: DWGCoordinateSystem = 'xz';
     
     // 缓存
+
     private databaseCache: Map<string, any> = new Map();
     private threeDrawingInstance: ViewportDraw | null = null;
     
@@ -68,6 +77,7 @@ export class DWGPlugin implements Plugin {
     }
 
     /**
+
      * 插件安装方法
      * @param config 插件配置
      */
@@ -77,8 +87,10 @@ export class DWGPlugin implements Plugin {
             if (config) {
                 this.config = { ...this.config, ...config };
             }
+            this.currentCoordinateSystem = this.config.defaultCoordinateSystem ?? 'xz';
             
             this.updateProgress(10, '正在初始化 LibreDwg...');
+
             
             // 初始化LibreDwg实例
             this.libreDwgInstance = await LibreDwg.create();
@@ -223,22 +235,44 @@ export class DWGPlugin implements Plugin {
             console.log(`[DWGPlugin] Updated ViewportDraw scaleFactor to: ${config.scaleFactor}`);
         }
         
-        // 如果 ViewportDraw 实例存在，更新坐标系设置
-        if (this.threeDrawingInstance && config.defaultCoordinateSystem !== undefined) {
-            const useXz = config.defaultCoordinateSystem === 'xz';
-            this.threeDrawingInstance.toggleCoordinateSystem(useXz);
+        // 如果配置中包含坐标系，更新当前设置并应用
+        if (config.defaultCoordinateSystem !== undefined) {
+            this.currentCoordinateSystem = config.defaultCoordinateSystem;
+            this.applyCoordinateSystemToViewportDraw(this.currentCoordinateSystem);
         }
-        
-
         
         console.log('[DWGPlugin] 配置已更新:', this.config);
     }
+
     
     /**
      * 获取当前配置
      */
     public getConfig(): DWGPluginConfig {
         return { ...this.config };
+    }
+
+    public getCurrentCoordinateSystem(): DWGCoordinateSystem {
+        return this.currentCoordinateSystem;
+    }
+
+    public setCoordinateSystem(system: DWGCoordinateSystem, persist: boolean = false): void {
+        if (system !== 'xy' && system !== 'xz') {
+            console.warn(`[DWGPlugin] 无效的坐标系: ${system}`);
+            return;
+        }
+        this.currentCoordinateSystem = system;
+        if (persist) {
+            this.config.defaultCoordinateSystem = system;
+        }
+        this.applyCoordinateSystemToViewportDraw(system);
+    }
+
+    private applyCoordinateSystemToViewportDraw(system: DWGCoordinateSystem = this.currentCoordinateSystem): void {
+        if (!this.threeDrawingInstance) {
+            return;
+        }
+        this.threeDrawingInstance.toggleCoordinateSystem(system === 'xz');
     }
     
     /**
@@ -249,6 +283,7 @@ export class DWGPlugin implements Plugin {
         this.progressCallback = callback;
     }
     
+
     /**
      * 更新进度
      */
@@ -292,28 +327,42 @@ export class DWGPlugin implements Plugin {
      * @param fileName 文件名
      * @returns 转换结果
      */
-    public async importDWGFile(arrayBuffer: ArrayBuffer, fileName: string): Promise<DWGConversionResult> {
+    public async importDWGFile(arrayBuffer: ArrayBuffer, fileName: string, options?: DWGConversionOptions): Promise<DWGConversionResult> {
         this.updateProgress(0, '开始导入DWG文件...');
+        const targetCoordinateSystem = options?.coordinateSystem ?? this.currentCoordinateSystem;
         
         const result = await this.executeDwgToJsonCommand(arrayBuffer, fileName);
         
         // 如果配置为自动渲染，则渲染到3D场景
         if (this.config.autoRender && result.json) {
             this.updateProgress(90, '渲染到3D场景...');
-            result.threeDrawing = this.renderToScene(result.json);
+            result.threeDrawing = this.renderToScene(result.json, { coordinateSystem: targetCoordinateSystem });
         }
         
         this.updateProgress(100, '导入完成');
         return result;
     }
+
     
     /**
+     * 确保 viewer 实例可用
+     */
+    private ensureViewer(): void {
+        if (!this.viewer) {
+            // 从全局App实例获取viewer
+            const appInstance = (window as any).appInstance;
+            this.viewer = appInstance?.viewer || null;
+        }
+    }
+
+    /**
      * 渲染DWG数据到3D场景
+
      * @param database DWG数据库
      * @returns ViewportDraw实例
      */
-    public renderToScene(database: any): ViewportDraw {
-        this.ensureViewer();
+    public renderToScene(database: any, options?: DWGConversionOptions): ViewportDraw {
+        const coordinateSystem = options?.coordinateSystem ?? this.currentCoordinateSystem;
         
         // 清理旧的实例
         if (this.threeDrawingInstance) {
@@ -321,15 +370,12 @@ export class DWGPlugin implements Plugin {
         }
         
         // 创建新实例并渲染
-        this.threeDrawingInstance = renderDWGDatabase(database);
+        this.threeDrawingInstance = renderDWGDatabase(database, this.config.scaleFactor, { coordinateSystem });
         this.threeDrawingInstance.setScaleFactor(this.config.scaleFactor);
-        
-        // 应用默认坐标系设置
-        if (this.config.defaultCoordinateSystem === 'xz') {
-            this.threeDrawingInstance.toggleCoordinateSystem(true);
-        }
+        this.applyCoordinateSystemToViewportDraw(coordinateSystem);
 
         // 触发渲染
+
         if (this.viewer && this.viewer.render) {
             this.viewer.render();
         }
@@ -344,9 +390,10 @@ export class DWGPlugin implements Plugin {
      * @param fileName 文件名
      * @returns ViewportDraw实例
      */
-    public async convertDWGToViewportDraw(arrayBuffer: ArrayBuffer, fileName: string): Promise<ViewportDraw> {
+    public async convertDWGToViewportDraw(arrayBuffer: ArrayBuffer, fileName: string, options?: DWGConversionOptions): Promise<ViewportDraw> {
         try {
             this.updateProgress(0, '开始转换DWG为ViewportDraw...');
+            const coordinateSystem = options?.coordinateSystem ?? this.currentCoordinateSystem;
             
             // 读取DWG文件
             const database = await this.readDWGFile(arrayBuffer, Dwg_File_Type.DWG, fileName);
@@ -357,7 +404,7 @@ export class DWGPlugin implements Plugin {
             this.updateProgress(50, '渲染到ViewportDraw...');
             
             // 转换为ViewportDraw
-            const viewportDraw = renderDWGDatabase(database);
+            const viewportDraw = renderDWGDatabase(database, this.config.scaleFactor, { coordinateSystem });
             viewportDraw.setScaleFactor(this.config.scaleFactor);
             
             this.updateProgress(100, 'ViewportDraw转换完成');
@@ -367,6 +414,7 @@ export class DWGPlugin implements Plugin {
             throw error;
         }
     }
+
     
     /**
      * 清理场景中的DWG实体

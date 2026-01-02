@@ -290,9 +290,11 @@ export class TableDrawer extends BaseDrawer<DwgTableEntity> {
       const material = new THREE.MeshBasicMaterial({
         map: texture,
         transparent: true,
+        alphaTest: 0.05,
         side: THREE.DoubleSide,
         depthWrite: false
       });
+
 
       // 计算网格尺寸
       const meshWidth = (canvas.width / dpiScale);

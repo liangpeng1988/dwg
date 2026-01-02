@@ -156,7 +156,7 @@ export class TextMesh {
    * @param halign 水平对齐 (0=left, 1=center, 2=right)
    * @param valign 垂直对齐 (0=baseline, 1=bottom, 2=middle, 3=top)
    * @param rotation 旋转角度（弧度）
-   * @returns THREE.Mesh | THREE.Sprite | null
+   * @returns THREE.Mesh | null
    */
   create(
     text: string, 
@@ -166,14 +166,13 @@ export class TextMesh {
     halign: number = 0,
     valign: number = 0,
     rotation: number = 0
-  ): THREE.Mesh | THREE.Sprite | null {
+  ): THREE.Mesh | null {
     // 处理可能的编码问题，确保文本正确显示
     const processedText = this.processTextEncoding(text);
     
-    // 如果没有有效字体，使用 Canvas 文字精灵作为备选方案
+    // 如果没有有效字体，使用 Canvas 文字贴图作为备选方案
     if (!this.hasValidFont()) {
-      const sprite = this.createTextSprite(processedText, position, fontSize, color, halign, valign, rotation);
-      return sprite;
+      return this.createTextMeshFromCanvas(processedText, position, fontSize, color, halign, valign, rotation);
     }
 
     try {
@@ -257,17 +256,17 @@ export class TextMesh {
 
       return textMesh;
     } catch (error) {
-      console.error('Error creating text mesh, falling back to sprite:', error);
-      // 使用 Canvas 文字精灵作为备选方案
-      return this.createTextSprite(processedText, position, fontSize, color, halign, valign, rotation);
+      console.error('Error creating text mesh, falling back to canvas texture:', error);
+      // 使用 Canvas 文字贴图作为备选方案
+      return this.createTextMeshFromCanvas(processedText, position, fontSize, color, halign, valign, rotation);
     }
   }
 
   /**
-   * 创建 Canvas 文字精灵（备选方案）
-   * 当没有有效的 3D 字体时使用
+   * 创建文字网格 (Canvas 贴图方案)
+   * 替代原有的 Sprite 方案，以确保文字不面向相机（不随视角旋转）
    */
-  private createTextSprite(
+  private createTextMeshFromCanvas(
     text: string,
     position: THREE.Vector3,
     fontSize: number,
@@ -275,7 +274,7 @@ export class TextMesh {
     halign: number = 0,
     valign: number = 0,
     rotation: number = 0
-  ): THREE.Sprite {
+  ): THREE.Mesh {
     // 确保文本不为空
     const displayText = text || ' ';
     
@@ -283,76 +282,81 @@ export class TextMesh {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d')!;
     
-    // 设置字体 - 使用固定的像素大小以获得清晰的文本
-    const fontSizePx = 64; // 固定 64px 以获得清晰的纹理
+    // 设置字体 - 使用较大的固定像素大小以获得清晰的文本
+    const fontSizePx = 128; 
     context.font = `bold ${fontSizePx}px Arial, sans-serif`;
     
     // 测量文本宽度
     const metrics = context.measureText(displayText);
-    const textWidth = Math.max(metrics.width, 20);
-    const textHeight = fontSizePx * 1.4;
+    const textWidth = Math.max(metrics.width, 10);
+    const textHeight = fontSizePx * 1.2;
     
-    // 设置 Canvas 大小（添加边距）
-    const padding = 16;
+    // 设置 Canvas 大小
+    const padding = 20;
     canvas.width = Math.ceil(textWidth + padding * 2);
     canvas.height = Math.ceil(textHeight + padding * 2);
     
-    // 重新设置字体（因为修改 canvas 大小会重置 context）
+    // 清除画布确保完全透明
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 重新设置字体
     context.font = `bold ${fontSizePx}px Arial, sans-serif`;
+
     
-    // 设置填充颜色 - 确保可见
+    // 设置填充颜色
     const colorHex = color != null ? color : 0x000000;
-    // 如果颜色是黑色或非常暗，使用深灰色以确保可见
     let fillColor = `#${colorHex.toString(16).padStart(6, '0')}`;
-    if (colorHex === 0x000000 || colorHex < 0x333333) {
-      fillColor = '#333333'; // 使用深灰色而不是纯黑色
-    }
-    context.fillStyle = fillColor;
-    context.textBaseline = 'top';
-    context.textAlign = 'left';
     
-    // 绘制文本
-    context.fillText(displayText, padding, padding);
+    context.fillStyle = fillColor;
+    context.textBaseline = 'middle';
+    context.textAlign = 'center';
+    
+    // 绘制文本 (居中绘制以便于 Mesh 对齐)
+    context.fillText(displayText, canvas.width / 2, canvas.height / 2);
     
     // 创建纹理
     const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     
-    // 创建精灵材质
-    const material = new THREE.SpriteMaterial({
+    // 计算尺寸
+    const aspect = canvas.width / canvas.height;
+    const meshHeight = fontSize;
+    const meshWidth = meshHeight * aspect;
+
+    // 创建平面几何体
+    const geometry = new THREE.PlaneGeometry(meshWidth, meshHeight);
+    
+    // 创建材质
+    const material = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
-      sizeAttenuation: true,
+      alphaTest: 0.05, // 帮助过滤掉背景杂色
+      side: THREE.DoubleSide,
       depthTest: true,
-      depthWrite: false
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
     });
+
     
-    // 创建精灵
-    const sprite = new THREE.Sprite(material);
+    const textMesh = new THREE.Mesh(geometry, material);
     
-    // 计算精灵尺寸 - 确保足够大可见
-    const aspect = canvas.width / canvas.height;
-    // 使用 fontSize 作为基准，确保最小尺寸
-    const spriteHeight = Math.max(fontSize * this.scaleFactor * 2, 5); // 最小高度 5
-    const spriteWidth = spriteHeight * aspect;
-    sprite.scale.set(spriteWidth, spriteHeight, 1);
-    
-    // 计算偏移量根据对齐方式
+    // 计算偏移量
     let offsetX = 0;
     let offsetY = 0;
     
     // 水平对齐
     switch (halign) {
       case 0: // Left
-        offsetX = spriteWidth / 2;
+        offsetX = meshWidth / 2;
         break;
       case 1: // Center
         offsetX = 0;
         break;
       case 2: // Right
-        offsetX = -spriteWidth / 2;
+        offsetX = -meshWidth / 2;
         break;
     }
     
@@ -360,49 +364,50 @@ export class TextMesh {
     switch (valign) {
       case 0: // Baseline
       case 1: // Bottom
-        offsetY = spriteHeight / 2;
+        offsetY = meshHeight / 2;
         break;
       case 2: // Middle
         offsetY = 0;
         break;
       case 3: // Top
-        offsetY = -spriteHeight / 2;
+        offsetY = -meshHeight / 2;
         break;
     }
     
     // 设置位置
-    sprite.position.set(
+    textMesh.position.set(
       position.x + offsetX,
       position.y + offsetY,
-      position.z + 0.1 // 稍微提高以避免 Z-fighting
+      position.z + 0.05 * this.scaleFactor
     );
     
-    // 精灵不支持 rotation.z，但可以通过 material.rotation 设置
+    // 应用旋转
     if (rotation) {
-      material.rotation = rotation;
+      textMesh.rotation.z = rotation;
     }
     
-    // 标记为文字精灵
-    sprite.userData.isTextSprite = false;
-    sprite.userData.text = displayText;
-    sprite.userData.fontSize = fontSize;
-    sprite.userData.color = colorHex;
-    sprite.userData.halign = halign;
-    sprite.userData.valign = valign;
-    sprite.userData.rotation = rotation;
-    sprite.userData.type = 'TEXT';
-    return sprite;
+    // 写入元数据
+    textMesh.userData = {
+      isTextSprite: false,
+      text: displayText,
+      fontSize: fontSize,
+      color: colorHex,
+      halign: halign,
+      valign: valign,
+      rotation: rotation,
+      type: 'TEXT'
+    };
+    
+    return textMesh;
   }
-
-
 
   /**
    * 创建简单的文字网格（用于占位符等简单场景）
    * @param text 文字内容
    * @param position 位置
-   * @returns THREE.Mesh | THREE.Sprite | null
+   * @returns THREE.Mesh | null
    */
-  createSimple(text: string, position: { x?: number; y?: number; z?: number }): THREE.Mesh | THREE.Sprite | null {
+  createSimple(text: string, position: { x?: number; y?: number; z?: number }): THREE.Mesh | null {
     // 使用新的 create 方法创建简单文字
     const vectorPosition = new THREE.Vector3(
       position.x || 0,
@@ -415,8 +420,6 @@ export class TextMesh {
     
     return this.create(processedText, vectorPosition, 1, 0x000000, 1, 2); // 居中对齐
   }
-
-
 
   /**
    * 提取 MTEXT 文本行（清理格式代码）

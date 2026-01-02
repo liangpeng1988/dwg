@@ -36,8 +36,13 @@ export class WipeoutDrawer extends BaseDrawer<DwgWipeoutEntity> {
         color: 0xFFFFFF,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.8
+        opacity: 0.8,
+        polygonOffset: true,
+        polygonOffsetFactor: -2, // 负值表示更靠近相机，确保遮盖
+        polygonOffsetUnits: -2,
+        depthWrite: true
       });
+
       
       const mesh = new THREE.Mesh(geometry, material);
       

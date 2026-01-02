@@ -214,15 +214,16 @@ export abstract class BaseDrawer<T extends DwgEntity = DwgEntity> {
    * 支持背景色感知，参考 svg/svgConverter.ts 的颜色处理方式
    * 支持全局单色模式
    */
-  protected getEntityColor(entity: DwgEntity, defaultColor: number = 0x000000): number {
+  protected getEntityColor(entity: DwgEntity, defaultColor: number = 0xffffff): number {
     // 如果启用了全局单色模式，直接返回单色值
     if (BaseDrawer.monochromeModeEnabled) {
       return BaseDrawer.monochromeColor;
     }
     
     // 否则使用原来的颜色获取逻辑
-    return getEntityColor(entity, this.context);
+    return getEntityColor(entity, this.context, defaultColor);
   }
+
   
   /**
    * 获取实体的线宽

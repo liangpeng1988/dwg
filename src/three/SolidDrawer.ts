@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { DwgEntity, DwgSolidEntity } from '../database';
 import { BaseDrawer } from './BaseDrawer';
+import { getOcsToWcsMatrix } from './types';
 
 /**
  * 实体填充绘制器
@@ -12,7 +13,9 @@ export class SolidDrawer extends BaseDrawer<DwgSolidEntity> {
     return entity.type === 'SOLID';
   }
 
-  draw(entity: DwgSolidEntity): THREE.Mesh {
+  draw(entity: DwgSolidEntity): THREE.Group | THREE.Mesh {
+    const group = new THREE.Group();
+
     // DWG SOLID 的顶点顺序是特殊的：corner1 → corner2 → corner4 → corner3
     // 这是一个“蝴蝶结”形状的排布
     const c1 = entity.corner1 ? new THREE.Vector3(
@@ -73,10 +76,23 @@ export class SolidDrawer extends BaseDrawer<DwgSolidEntity> {
     // 使用实体颜色
     const material = this.createMeshMaterialForEntity(entity);
     const mesh = new THREE.Mesh(geometry, material);
+    group.add(mesh);
     
-    // 应用 extrusionDirection
-    this.applyExtrusionDirection(mesh, entity.extrusionDirection);
+    // 应用 OCS 变换
+    if (entity.extrusionDirection) {
+      const ocsMatrix = getOcsToWcsMatrix(entity.extrusionDirection);
+      group.applyMatrix4(ocsMatrix);
+    }
+
+    // 应用 elevation (如果有的话，SOLID 也可以有 elevation)
+    if (entity.elevation != null) {
+      group.translateZ(entity.elevation * this.scaleFactor);
+    }
+
+    // Z-fighting jitter
+    const jitter = (parseInt(entity.handle || '0', 16) % 100) * 0.0001;
+    group.translateZ(jitter);
     
-    return mesh;
+    return group;
   }
 }

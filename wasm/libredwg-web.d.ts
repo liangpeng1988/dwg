@@ -1,5 +1,5 @@
 // TypeScript bindings for emscripten-generated code.  Automatically generated at compile time.
-declare namespace RuntimeExports {
+export namespace RuntimeExports {
     namespace FS {
         export let root: any;
         export let mounts: any[];

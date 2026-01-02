@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import * as poly2tri from 'poly2tri';
+
 
 /**
  * 嵌套多边形信息
@@ -53,18 +53,22 @@ export class NestedPolygonProcessor {
       };
     });
 
+    // 过滤掉点数过少的多边形
+    const validPolygons = polygonInfos.filter(p => p.points.length >= 3);
+    if (validPolygons.length === 0) return [];
+
     // 2. 按面积绝对值降序排序（最大的最可能是最外层）
-    const sortedIndices = polygonInfos
+    const sortedIndices = validPolygons
       .map((_, i) => i)
-      .sort((a, b) => Math.abs(polygonInfos[b].signedArea) - Math.abs(polygonInfos[a].signedArea));
+      .sort((a, b) => Math.abs(validPolygons[b].signedArea) - Math.abs(validPolygons[a].signedArea));
 
     // 3. 构建嵌套关系树
-    this.buildNestingTree(polygonInfos, sortedIndices);
+    this.buildNestingTree(validPolygons, sortedIndices);
 
     // 4. 计算嵌套层级并确定是否填充
-    this.calculateNestLevels(polygonInfos);
+    this.calculateNestLevels(validPolygons);
 
-    return polygonInfos;
+    return validPolygons;
   }
 
   /**
@@ -103,13 +107,10 @@ export class NestedPolygonProcessor {
    * 计算嵌套层级并确定是否填充
    */
   private calculateNestLevels(polygons: NestedPolygon[]): void {
-    // 找到所有根节点（没有父节点的多边形）
     const roots = polygons.filter(p => p.parentIndex === -1);
     
-    // 递归计算层级
     const setLevel = (polygon: NestedPolygon, level: number) => {
       polygon.nestLevel = level;
-      // 奇偶规则：偶数层（0, 2, 4...）填充，奇数层（1, 3, 5...）是孔洞
       polygon.shouldFill = level % 2 === 0;
       
       for (const childIdx of polygon.childIndices) {
@@ -123,85 +124,30 @@ export class NestedPolygonProcessor {
   }
 
   /**
-   * 创建填充网格（处理嵌套孔洞）
-   * @param polygons 处理后的嵌套多边形数组
-   * @param color 填充颜色
-   * @returns THREE.Mesh 或 null
+   * 创建填充网格
    */
   createFilledMesh(polygons: NestedPolygon[], color: number): THREE.Mesh | null {
     const allVertices: number[] = [];
     const allIndices: number[] = [];
-    let vertexOffset = 0;
-
-    // 处理每个需要填充的多边形
-    for (const polygon of polygons) {
-      if (!polygon.shouldFill || polygon.points.length < 3) continue;
+    
+    // 筛选出所有需要填充的多边形（根节点或奇数层级的岛屿）
+    const fillPolygons = polygons.filter(p => p.shouldFill && p.points.length >= 3);
+    
+    for (const polygon of fillPolygons) {
+      // 对每个填充区域应用微小的 Z 偏移，层级越高，偏移越大，防止 Z-fighting
+      // 这里的偏移量应非常小，以免侧面观察时明显
+      const zOffset = polygon.nestLevel * 0.0001;
 
       try {
-        // 确保外边界是逆时针方向
-        let outerPoints = polygon.points;
-        if (polygon.signedArea < 0) {
-          outerPoints = [...outerPoints].reverse();
-        }
-
-        // 准备 poly2tri 轮廓
-        const contour = this.preparePointsForPoly2tri(outerPoints)
-          .map(p => new poly2tri.Point(p.x, p.y));
-        
-        if (contour.length < 3) continue;
-        
-        const swctx = new poly2tri.SweepContext(contour);
-
-        // 添加直接子多边形作为孔洞（它们是 shouldFill=false 的）
-        for (const childIdx of polygon.childIndices) {
-          const child = polygons[childIdx];
-          if (child.shouldFill) continue; // 跳过需要填充的子多边形（岛中岛）
-
-          let holePoints = child.points;
-          // 确保孔洞是顺时针方向
-          if (child.signedArea > 0) {
-            holePoints = [...holePoints].reverse();
-          }
-
-          const holePrepared = this.preparePointsForPoly2tri(holePoints);
-          if (holePrepared.length >= 3) {
-            const holeContour = holePrepared.map(p => new poly2tri.Point(p.x, p.y));
-            swctx.addHole(holeContour);
-          }
-        }
-
-        // 执行三角剖分
-        swctx.triangulate();
-        const triangles = swctx.getTriangles();
-
-        // 收集顶点和索引
-        const pointIndexMap = new Map<string, number>();
-
-        for (const tri of triangles) {
-          const triPoints = tri.getPoints();
-          for (const tp of triPoints) {
-            const key = `${tp.x.toFixed(6)},${tp.y.toFixed(6)}`;
-            if (!pointIndexMap.has(key)) {
-              pointIndexMap.set(key, vertexOffset + allVertices.length / 3);
-              allVertices.push(tp.x, tp.y, 0);
-            }
-            allIndices.push(pointIndexMap.get(key)!);
-          }
-        }
-
-        vertexOffset = allVertices.length / 3;
-
+        // 直接使用 ShapeGeometry (earcut)，它对 CAD 这种不规则数据的容忍度更高，且不需要复杂的 preparePointsForPoly2tri
+        this.addPolygonWithShapeGeometry(polygon, polygons, allVertices, allIndices, zOffset);
       } catch (error) {
-        console.warn('poly2tri failed for polygon, trying ShapeGeometry:', error);
-        // 回退到 ShapeGeometry
-        this.addPolygonWithShapeGeometry(polygon, polygons, allVertices, allIndices, vertexOffset);
-        vertexOffset = allVertices.length / 3;
+        console.warn('Triangulation failed for polygon:', error);
       }
     }
 
     if (allIndices.length === 0) return null;
 
-    // 创建 BufferGeometry
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(allVertices, 3));
     geometry.setIndex(allIndices);
@@ -211,24 +157,29 @@ export class NestedPolygonProcessor {
       color: color,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.8
+      opacity: 0.8,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
+      // 对于半透明填充，关闭 depthWrite 可以减少由于排序问题导致的“破面”感
+      // 只有在确定不重叠或能接受排序错误时才开启。在 CAD 填充中，通常关闭更好。
+      depthWrite: false,
+      depthTest: true
     });
 
     return new THREE.Mesh(geometry, material);
   }
 
-  /**
-   * 使用 ShapeGeometry 添加多边形（回退方案）
-   */
   private addPolygonWithShapeGeometry(
     polygon: NestedPolygon,
     allPolygons: NestedPolygon[],
     allVertices: number[],
     allIndices: number[],
-    vertexOffset: number
+    zOffset: number = 0
   ): void {
     try {
       let outerPoints = polygon.points;
+      // ShapeGeometry 内部使用 earcut，通常需要 CCW 外环
       if (polygon.signedArea < 0) {
         outerPoints = [...outerPoints].reverse();
       }
@@ -240,17 +191,19 @@ export class NestedPolygonProcessor {
       }
       shape.closePath();
 
-      // 添加孔洞
+      // 添加直接子级作为孔洞
       for (const childIdx of polygon.childIndices) {
         const child = allPolygons[childIdx];
-        if (child.shouldFill) continue;
+        if (child.shouldFill) continue; // 跳过嵌套的岛屿（它们会作为独立 fillPolygons 处理）
 
         let holePoints = child.points;
+        // ShapeGeometry 期望孔洞方向与外环相反（即 CW）
         if (child.signedArea > 0) {
           holePoints = [...holePoints].reverse();
         }
 
         const hole = new THREE.Path();
+        if (holePoints.length < 3) continue;
         hole.moveTo(holePoints[0].x, holePoints[0].y);
         for (let i = 1; i < holePoints.length; i++) {
           hole.lineTo(holePoints[i].x, holePoints[i].y);
@@ -266,24 +219,20 @@ export class NestedPolygonProcessor {
       if (posAttr && indexAttr) {
         const baseOffset = allVertices.length / 3;
         for (let i = 0; i < posAttr.count; i++) {
-          allVertices.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+          allVertices.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i) + zOffset);
         }
         for (let i = 0; i < indexAttr.count; i++) {
           allIndices.push(baseOffset + indexAttr.getX(i));
         }
       }
-
       shapeGeom.dispose();
     } catch (error) {
-      console.warn('ShapeGeometry also failed:', error);
+      console.warn('ShapeGeometry processing failed:', error);
     }
   }
 
-  /**
-   * 检查多边形A是否在多边形B内部
-   */
+
   private isPolygonInsidePolygon(inner: NestedPolygon, outer: NestedPolygon): boolean {
-    // 先检查包围盒
     if (inner.bbox.minX < outer.bbox.minX - this.epsilon ||
         inner.bbox.maxX > outer.bbox.maxX + this.epsilon ||
         inner.bbox.minY < outer.bbox.minY - this.epsilon ||
@@ -291,7 +240,6 @@ export class NestedPolygonProcessor {
       return false;
     }
 
-    // 检查多个采样点
     const sampleCount = Math.min(inner.points.length, 5);
     const step = Math.max(1, Math.floor(inner.points.length / sampleCount));
     let insideCount = 0;
@@ -302,51 +250,33 @@ export class NestedPolygonProcessor {
         insideCount++;
       }
     }
-
     return insideCount > sampleCount / 2;
   }
 
-  /**
-   * 检查点是否在多边形内部（射线法）
-   */
   private isPointInPolygon(point: THREE.Vector2, polygon: THREE.Vector2[]): boolean {
     let inside = false;
-    const x = point.x;
-    const y = point.y;
-
+    const { x, y } = point;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      const xi = polygon[i].x;
-      const yi = polygon[i].y;
-      const xj = polygon[j].x;
-      const yj = polygon[j].y;
-
+      const xi = polygon[i].x, yi = polygon[i].y;
+      const xj = polygon[j].x, yj = polygon[j].y;
       if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
         inside = !inside;
       }
     }
-
     return inside;
   }
 
-  /**
-   * 计算多边形的有符号面积
-   * 正值表示逆时针（CCW），负值表示顺时针（CW）
-   */
   private calculateSignedArea(points: THREE.Vector2[]): number {
     let area = 0;
-    const n = points.length;
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
+    for (let i = 0; i < points.length; i++) {
+      const j = (i + 1) % points.length;
       area += points[i].x * points[j].y;
       area -= points[j].x * points[i].y;
     }
     return area / 2;
   }
 
-  /**
-   * 计算包围盒
-   */
-  private calculateBoundingBox(points: THREE.Vector2[]): { minX: number; minY: number; maxX: number; maxY: number } {
+  private calculateBoundingBox(points: THREE.Vector2[]) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of points) {
       if (p.x < minX) minX = p.x;
@@ -358,97 +288,89 @@ export class NestedPolygonProcessor {
   }
 
   /**
-   * 清理多边形点：去除重复点和过近的点
+   * 清理多边形点：去除重复点和共线点，修复自相交
    */
   private cleanPolygonPoints(points: THREE.Vector2[]): THREE.Vector2[] {
     if (points.length < 3) return points;
-
-    const cleaned: THREE.Vector2[] = [];
-    const epsilon = 1e-4;
-
+    
+    let cleaned: THREE.Vector2[] = [];
+    const epsilon = 1e-6; 
+    
+    // 1. 移除重复点
     for (let i = 0; i < points.length; i++) {
       const current = points[i];
-
       if (cleaned.length > 0) {
         const last = cleaned[cleaned.length - 1];
-        const dx = current.x - last.x;
-        const dy = current.y - last.y;
-        if (dx * dx + dy * dy < epsilon * epsilon) {
-          continue;
-        }
+        if (current.distanceTo(last) < epsilon) continue;
       }
-
       cleaned.push(current);
     }
-
-    // 检查首尾是否重复
+    
+    // 2. 检查首尾闭合
     if (cleaned.length > 1) {
       const first = cleaned[0];
       const last = cleaned[cleaned.length - 1];
-      const dx = first.x - last.x;
-      const dy = first.y - last.y;
-      if (dx * dx + dy * dy < epsilon * epsilon) {
+      if (first.distanceTo(last) < epsilon) {
         cleaned.pop();
       }
     }
+    
+    if (cleaned.length < 3) return [];
 
-    return cleaned;
+    // 3. 移除共线点 (使用面积法判定，更稳定)
+    const noCollinear: THREE.Vector2[] = [];
+    for (let i = 0; i < cleaned.length; i++) {
+      const prev = cleaned[(i - 1 + cleaned.length) % cleaned.length];
+      const curr = cleaned[i];
+      const next = cleaned[(i + 1) % cleaned.length];
+      
+      const area = Math.abs((curr.x - prev.x) * (next.y - prev.y) - (next.x - prev.x) * (curr.y - prev.y));
+      // 如果面积非常小，说明三点几乎共线，移除中间点
+      if (area > 1e-8) {
+        noCollinear.push(curr);
+      }
+    }
+    
+    if (noCollinear.length < 3) return [];
+
+    // 4. 粗修复自相交 (移除尖锐回退)
+    return this.fixSelfIntersections(noCollinear);
   }
 
   /**
-   * 为 poly2tri 准备点数据
+   * 修复自相交 (移除尖锐回退点)
    */
-  private preparePointsForPoly2tri(points: THREE.Vector2[]): THREE.Vector2[] {
-    if (points.length < 3) return [];
-
-    // 使用更高精度的去重
-    const epsilon = 1e-6;
-    const seen = new Set<string>();
+  private fixSelfIntersections(points: THREE.Vector2[]): THREE.Vector2[] {
     const result: THREE.Vector2[] = [];
-
-    for (const p of points) {
-      const key = `${Math.round(p.x / epsilon) * epsilon},${Math.round(p.y / epsilon) * epsilon}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        result.push(p);
+    const n = points.length;
+    
+    for (let i = 0; i < n; i++) {
+      const curr = points[i];
+      if (result.length >= 2) {
+        const prev = result[result.length - 1];
+        const prevPrev = result[result.length - 2];
+        
+        const v1 = new THREE.Vector2().subVectors(prev, prevPrev);
+        const v2 = new THREE.Vector2().subVectors(curr, prev);
+        
+        const v1Len = v1.length();
+        const v2Len = v2.length();
+        
+        if (v1Len > 1e-9 && v2Len > 1e-9) {
+          const dot = v1.dot(v2) / (v1Len * v2Len);
+          // 如果点几乎完全反向 (dot < -0.999), 则说明发生了尖锐回退，跳过 prev 点
+          if (dot < -0.9999) {
+            result.pop();
+            // 递归检查新的 prev
+            i--; 
+            continue;
+          }
+        }
       }
+      result.push(curr);
     }
-
     return result;
   }
-
-  /**
-   * 获取需要填充的多边形（按嵌套层级分组）
-   */
-  getPolygonsByLevel(polygons: NestedPolygon[]): Map<number, NestedPolygon[]> {
-    const byLevel = new Map<number, NestedPolygon[]>();
-    
-    for (const p of polygons) {
-      if (!byLevel.has(p.nestLevel)) {
-        byLevel.set(p.nestLevel, []);
-      }
-      byLevel.get(p.nestLevel)!.push(p);
-    }
-
-    return byLevel;
-  }
-
-  /**
-   * 打印嵌套结构（调试用）
-   */
-  printNestingStructure(polygons: NestedPolygon[]): void {
-    const printNode = (polygon: NestedPolygon, idx: number, indent: string) => {
-      console.log(`${indent}[${idx}] Level=${polygon.nestLevel}, Fill=${polygon.shouldFill}, Area=${polygon.signedArea.toFixed(2)}`);
-      for (const childIdx of polygon.childIndices) {
-        printNode(polygons[childIdx], childIdx, indent + '  ');
-      }
-    };
-
-    console.log('=== Nesting Structure ===');
-    for (let i = 0; i < polygons.length; i++) {
-      if (polygons[i].parentIndex === -1) {
-        printNode(polygons[i], i, '');
-      }
-    }
-  }
 }
+
+

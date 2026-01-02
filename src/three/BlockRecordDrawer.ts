@@ -133,8 +133,8 @@ export class BlockRecordDrawer {
       options.rotation ?? 0,
       undefined,
       this.scaleFactor
-      // 不对块基点做额外偏移，保持与 InsertDrawer / SVG insert 相同的变换逻辑
     );
+
 
     root.applyMatrix4(transformMatrix);
   }

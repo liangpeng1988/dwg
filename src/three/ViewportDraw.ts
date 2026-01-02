@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { DwgDatabase, DwgLayerTableEntry, DwgEntity, DwgPoint3D } from '../database';
-import { DrawContext, LayerInfo, bgrToRgb, getColorFromIndex } from './types';
+import { DrawContext, LayerInfo, getColorFromIndex } from './types';
 import { Layer2D } from './Layer2D';
 // 导入所有绘制器
 import { BaseDrawer } from './BaseDrawer';
@@ -86,7 +86,13 @@ export class ViewportDraw {
    */
   public toggleCoordinateSystem(useXZ: boolean): void {
     this.useXZPlane = useXZ;
+    if (useXZ) {
+      this.layerGroup.rotation.set(-Math.PI / 2, 0, 0);
+    } else {
+      this.layerGroup.rotation.set(0, 0, 0);
+    }
   }
+
 
   /**
    * 加载DWG数据库
@@ -122,12 +128,13 @@ export class ViewportDraw {
       // 确定图层颜色
       let layerColor = 0xffffff;
       if (layerEntry.trueColor && layerEntry.trueColor > 0) {
-        layerColor = bgrToRgb(layerEntry.trueColor);
-      } else if (layerEntry.color && layerEntry.color > 0) {
-        layerColor = bgrToRgb(layerEntry.color);
-      } else if (layerEntry.colorIndex && layerEntry.colorIndex > 0) {
+        layerColor = layerEntry.trueColor;
+      } else if (layerEntry.colorIndex && layerEntry.colorIndex > 0 && layerEntry.colorIndex < 256) {
         layerColor = getColorFromIndex(layerEntry.colorIndex);
+      } else if (layerEntry.color && layerEntry.color > 0) {
+        layerColor = layerEntry.color > 255 ? layerEntry.color : getColorFromIndex(layerEntry.color);
       }
+
 
       // 确定图层可见性（frozen 或 off 都会导致不可见）
       const isVisible = !layerEntry.frozen && !layerEntry.off;
@@ -201,12 +208,13 @@ export class ViewportDraw {
       // 确定图层颜色
       let layerColor = 0xffffff;
       if (layerEntry.trueColor && layerEntry.trueColor > 0) {
-        layerColor = bgrToRgb(layerEntry.trueColor);
-      } else if (layerEntry.color && layerEntry.color > 0) {
-        layerColor = bgrToRgb(layerEntry.color);
-      } else if (layerEntry.colorIndex && layerEntry.colorIndex > 0) {
+        layerColor = layerEntry.trueColor;
+      } else if (layerEntry.colorIndex && layerEntry.colorIndex > 0 && layerEntry.colorIndex < 256) {
         layerColor = getColorFromIndex(layerEntry.colorIndex);
+      } else if (layerEntry.color && layerEntry.color > 0) {
+        layerColor = layerEntry.color > 255 ? layerEntry.color : getColorFromIndex(layerEntry.color);
       }
+
       
       // 确定图层可见性（frozen 或 off 都会导致不可见）
       const isVisible = !layerEntry.frozen && !layerEntry.off;
@@ -688,8 +696,16 @@ export function renderJSONString(jsonString: string, scaleFactor: number = 1): V
  * @param database DWG数据库对象
  * @param scaleFactor 缩放因子
  */
-export function renderDWGDatabase(database: DwgDatabase, scaleFactor: number = 1): ViewportDraw {
+interface RenderDWGOptions {
+  coordinateSystem?: 'xy' | 'xz';
+}
+
+export function renderDWGDatabase(database: DwgDatabase, scaleFactor: number = 1, options?: RenderDWGOptions): ViewportDraw {
   const viewport = new ViewportDraw(scaleFactor);
   viewport.loadDatabase(database);
+  if (options?.coordinateSystem) {
+    viewport.toggleCoordinateSystem(options.coordinateSystem === 'xz');
+  }
   return viewport;
 }
+

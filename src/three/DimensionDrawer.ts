@@ -503,7 +503,7 @@ export class DimensionDrawer extends BaseDrawer<DwgEntity> {
     height: number,
     color: number,
     rotation?: number
-  ): THREE.Mesh | THREE.Sprite | null {
+  ): THREE.Mesh | null {
     try {
       // 使用 TextMesh 来创建文字网格
       const pos = new THREE.Vector3(

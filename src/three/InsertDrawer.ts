@@ -99,7 +99,7 @@ export class InsertDrawer extends BaseDrawer<DwgInsertEntity> {
         }
       }
       
-      // 计算当前块的变换矩阵（在绘制块内实体之前）
+      // 计算当前块的变换矩阵
       const transformMatrix = createInsertTransformMatrix(
         entity.insertionPoint,
         basePoint,
@@ -107,26 +107,15 @@ export class InsertDrawer extends BaseDrawer<DwgInsertEntity> {
         entity.rotation || 0,
         entity.extrusionDirection,
         this.scaleFactor
-        // 注意：此处不再对 block 基点做偏移，DWG 中块内实体坐标已相对基点，
-        // 直接以 insertionPoint 作为最终插入点，与 SVG 转换逻辑保持一致
       );
-      
-      // 如果有累积变换（嵌套块），组合变换：最终变换 = 累积变换（父块） × 当前块变换
-      // 这样嵌套块的变换会正确累积
-      let finalTransformMatrix: THREE.Matrix4;
-      if (this.context.accumulatedTransform) {
-        finalTransformMatrix = new THREE.Matrix4();
-        finalTransformMatrix.multiplyMatrices(this.context.accumulatedTransform, transformMatrix);
-      } else {
-        finalTransformMatrix = transformMatrix;
-      }
-      
-      // 保存之前的累积变换，并设置当前块的变换供嵌套 INSERT 使用
-      const prevAccumulatedTransform = this.context.accumulatedTransform;
-      this.context.accumulatedTransform = finalTransformMatrix;
-      
+
+      // 应用变换矩阵到 group
+      // 注意：不要手动累积父块变换，Three.js 的场景层级（group.add）会自动处理嵌套变换
+      group.applyMatrix4(transformMatrix);
+
+
       try {
-        // 绘制块内实体（此时 context.accumulatedTransform 已设置，嵌套的 INSERT 会使用）
+        // 绘制块内实体
         if (blockEntities && blockEntities.length > 0) {
           // 绘制块中的每个实体，直接添加到 group
           this.drawBlockEntities(group, blockEntities, entity, basePoint);
@@ -136,12 +125,9 @@ export class InsertDrawer extends BaseDrawer<DwgInsertEntity> {
           group.add(placeholder);
         }
       } finally {
-        // 恢复之前的累积变换
-        this.context.accumulatedTransform = prevAccumulatedTransform;
+        // 无需额外处理
       }
-      
-      // 应用变换矩阵到 group（在绘制完块内实体之后）
-      group.applyMatrix4(finalTransformMatrix);
+
       
       // 处理行列阵列
       if ((entity.rowCount > 1 || entity.columnCount > 1) && 
@@ -169,23 +155,16 @@ export class InsertDrawer extends BaseDrawer<DwgInsertEntity> {
     _basePoint?: DwgPoint3D
   ): void {
     // 获取父块的颜色作为 BYBLOCK 继承颜色
-    // 参考 svg/svgConverter.ts 第 584-590 行:
-    // BYBLOCK 的实体将继承父块的颜色
-    // 使用统一的实体取色方法，保持与其他绘制路径一致
     const inheritedColor = getEntityColor(parentEntity, this.context);
-    
-    // 注意：accumulatedTransform 已经在 draw() 方法中设置到 context
-    // 嵌套的 INSERT 在 draw() 时会读取 context.accumulatedTransform
-    // 所以这里不需要再次设置
     
     for (const blockEntity of blockEntities) {
       let instance: THREE.Object3D | null = null;
       
       if (this.delegate) {
         // 使用代理创建对象，传递继承颜色
-        // accumulatedTransform 通过 context 传递，不需要额外参数
         instance = this.delegate.createEntityObject(blockEntity, inheritedColor);
       }
+
       
       if (instance) {
         group.add(instance);
